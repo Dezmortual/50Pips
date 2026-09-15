@@ -22,7 +22,12 @@ PUBLIC_HOSTS = [
 
 
 def _log(msg):
-    print(f"[exchange] {msg}", flush=True)
+    """Send network logs to the dashboard log (and stdout as backup)."""
+    try:
+        import bot  # already loaded by the time this runs — safe circular
+        bot.log(f"[net] {msg}")
+    except Exception:
+        print(f"[exchange] {msg}", flush=True)
 
 
 def _get(path: str, params: dict = None):

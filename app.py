@@ -378,10 +378,9 @@ def health():
     return {"status": "ok"}
 
 
-# Start the trading loop at IMPORT time — gunicorn (production) imports this
-# module instead of running it as a script, so an `if __name__ == "__main__"`
-# guard would never fire and the bot would silently never start.
-bot.start_background()
-
+# The trading loop is started by gunicorn's post_fork hook (see
+# gunicorn.conf.py) so it runs in the same process that serves this dashboard.
+# This __main__ branch is only for local development (python app.py).
 if __name__ == "__main__":
+    bot.start_background()
     app.run(host="0.0.0.0", port=Config.PORT)
