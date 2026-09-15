@@ -2,10 +2,14 @@
 
 The loop can be paused/resumed from the dashboard (Start/Stop buttons)
 without restarting the service — see `stop_bot()` / `start_bot()`.
+
+Every step of every cycle is logged, and the market-data fetch runs under a
+hard watchdog timeout so a network/DNS hang can never freeze the bot silently.
 """
 import time
 import traceback
 import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutTimeout
 from datetime import datetime, timezone
 
 import exchange
@@ -18,6 +22,10 @@ broker = PaperBroker(Config.STATE_FILE, Config.SYMBOL, Config.STARTING_CASH)
 _log_lines = []   # recent log lines for the dashboard
 _lock = threading.Lock()
 _running = threading.Event()   # controls whether the bot actively trades
+
+# single-thread executor used ONLY as a watchdog wrapper around network fetches;
+# if DNS/network hangs forever the future times out and the cycle is skipped
+_fetch_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="fetch")
 
 
 def log(msg: str):
@@ -51,8 +59,18 @@ def stop_bot():
 
 def run_cycle():
     """One iteration: fetch data -> run the 50-Pips-A-Day strategy -> act."""
-    # need enough history for a 200 EMA + slope lookback + swing detection
-    candles = exchange.get_klines(Config.SYMBOL, Config.INTERVAL, limit=1000)
+    log("cycle start — fetching candles...")
+    try:
+        future = _fetch_pool.submit(
+            exchange.get_klines, Config.SYMBOL, Config.INTERVAL, 1000
+        )
+        candles = future.result(timeout=45)
+    except FutTimeout:
+        log("ERROR: market data fetch did not return within 45s — skipping cycle. "
+            "If this repeats, Binance may be unreachable from this server (check "
+            "Render region / geo-block).")
+        return
+    log(f"candles fetched OK ({len(candles)} bars)")
     price = candles[-1]["close"]
 
     decision = strategy.decide(candles, broker.position, Config)
@@ -86,6 +104,7 @@ def run_cycle():
 
     broker.snapshot_equity(price)
     broker.save()
+    log("cycle done")
 
 
 def loop_forever():

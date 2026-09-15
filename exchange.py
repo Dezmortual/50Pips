@@ -3,6 +3,9 @@
 Uses only PUBLIC endpoints for paper trading (no API key needed).
 Has multiple hosts because api.binance.com is geo-blocked in some regions;
 data-api.binance.vision serves the same public data without restrictions.
+
+Every attempt is logged so any network problem (DNS, blocks, timeouts) is
+visible in the bot log / Render logs instead of hanging silently.
 """
 import time
 import hmac
@@ -17,21 +20,31 @@ PUBLIC_HOSTS = [
     "https://api1.binance.com",
 ]
 
-session = requests.Session()
-session.headers.update({"User-Agent": "personal-trading-bot/1.0"})
+
+def _log(msg):
+    print(f"[exchange] {msg}", flush=True)
 
 
 def _get(path: str, params: dict = None):
-    """Try each host until one works."""
+    """Try each host until one works. Logs each attempt."""
     last_err = None
     for host in PUBLIC_HOSTS:
         try:
-            r = session.get(host + path, params=params or {}, timeout=15)
+            _log(f"fetching {host}{path} params={params or {}}")
+            session = requests.Session()  # fresh session each attempt — avoids
+                                          # stale/hung connection reuse
+            r = session.get(host + path, params=params or {},
+                            timeout=(5, 15))  # 5s connect, 15s read
             if r.status_code == 200:
+                _log(f"OK from {host} ({len(r.content)} bytes)")
                 return r.json()
             last_err = f"{host} -> HTTP {r.status_code}"
+            _log(last_err)
+            if r.status_code == 451:
+                _log("HTTP 451 = geo-blocked. Trying next host...")
         except requests.RequestException as e:
             last_err = f"{host} -> {e}"
+            _log(last_err)
     raise RuntimeError(f"All Binance hosts failed. Last error: {last_err}")
 
 
